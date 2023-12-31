@@ -16,10 +16,6 @@ type PGPool = Pool<Postgres>;
 const ACCESS_TOKEN_EXP: usize = 60 * 60 * 1000 * 1000;
 const REFRESH_TOKEN_EXP: usize = 5 * 24 * 60 * 60 * 1000 * 1000;
 
-pub struct UserAuthState {
-    secret: String,
-    expiration: u64
-}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()>{
@@ -32,6 +28,12 @@ async fn main() -> std::io::Result<()>{
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
+            .service(
+                web::scope("/events")
+                    .wrap(service::auth::AuthMiddleware{
+                        db_pool: pool.clone()
+                    })
+            )
             .service(
                 web::scope("/users")
                 .configure(handlers::user::config)
