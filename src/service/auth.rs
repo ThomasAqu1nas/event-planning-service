@@ -1,16 +1,20 @@
 use std::future::{ready, Ready};
-use actix_web::{dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform}, web, HttpResponse};
+use actix_web::{dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform}, http::header::HeaderValue, HttpMessage};
 use futures_util::future::LocalBoxFuture;
-use crate::{PGPool, ACCESS_TOKEN_EXP, REFRESH_TOKEN_EXP, errors::MyError};
+use crate::{PGPool, ACCESS_TOKEN_EXP, db, dto::UpdateUserDto};
 
-use self::jwt::{TokenType, parse_request, refresh, decode_claims};
+use self::jwt::TokenType;
 
-pub struct MiddlewareFactory {
-    db_pool: web::Data<PGPool>
+pub struct UserAuthData{
+    pub user_id: uuid::Uuid,
+    pub username: String
 }
 
+pub struct AuthMiddleware {
+    pub db_pool: PGPool
+}
 
-impl<S, B> Transform<S, ServiceRequest> for MiddlewareFactory 
+impl<S, B> Transform<S, ServiceRequest> for AuthMiddleware 
     where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
     S::Future: 'static,
@@ -18,12 +22,12 @@ impl<S, B> Transform<S, ServiceRequest> for MiddlewareFactory
 {
     type Response = ServiceResponse<B>;
     type Error = actix_web::Error;
-    type Transform = Middleware<S>;
+    type Transform = AuthMiddlewareSerive<S>;
     type InitError = ();
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ready(Ok(Middleware {
+        ready(Ok(AuthMiddlewareSerive {
             service,
             db_pool: self.db_pool.clone() 
         }))
@@ -31,18 +35,16 @@ impl<S, B> Transform<S, ServiceRequest> for MiddlewareFactory
 }
 
 
-pub struct Middleware<S> {
+pub struct AuthMiddlewareSerive<S> {
     service: S,
-    db_pool: web::Data<PGPool>
+    db_pool: PGPool
 }
 
-
-
-impl<S, B> Service<ServiceRequest> for Middleware<S>
+impl<S, B> Service<ServiceRequest> for AuthMiddlewareSerive<S>
     where 
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
     S::Future: 'static,
-    B: 'static 
+    B: 'static,
 {
     type Response = ServiceResponse<B>;
     type Error = actix_web::Error;
@@ -50,33 +52,76 @@ impl<S, B> Service<ServiceRequest> for Middleware<S>
 
     forward_ready!(service);
     
-    fn call(&self, req: ServiceRequest) -> Self::Future {
+    fn call(&self, mut req: ServiceRequest) -> Self::Future {
         let access_token_validation_result: Result<String, crate::errors::MyError> = jwt::validate(&req, TokenType::Access, "Bearer");
         let refresh_token_validation_result: Result<String, crate::errors::MyError> = jwt::validate(&req, TokenType::Refresh, "Bearer");
-        let response: Self::Response;
-        let fut: <S as Service<ServiceRequest>>::Future;
-
-
-        Box::pin(async move {
-            match (access_token_validation_result, refresh_token_validation_result) {
-                (Ok(_), Ok(_)) => {
-                    fut = self.service.call(req);
+        let pool = self.db_pool.clone();
+        match (access_token_validation_result, refresh_token_validation_result) {
+            (Ok(_), Ok(refresh_token)) => {
+                match jwt::decode_claims(&TokenType::Refresh, refresh_token) {
+                    Ok(claims) => {
+                        let user_auth_data = UserAuthData {
+                            user_id: claims.claims.user_id,
+                            username: claims.claims.username,
+                        };
+                        req.extensions_mut().insert(user_auth_data);
+                    },
+                    _ => {}
+                }
+                let fut = self.service.call(req);
+                Box::pin(async move {
                     let res = fut.await?;
                     Ok(res)
-                },
-                (_, Err(_)) => {
-                    let token = parse_request(&req, "Bearer")
-                        .unwrap_or("default_token".to_string());
-                    let pool = self.db_pool.as_ref();
-                    let refresh_res = refresh(token, &TokenType::Refresh, pool, REFRESH_TOKEN_EXP)
-                        .await;
-                    if let Err(refresh) = refresh_res {
-                        return Err(MyError::InternalError);
+                })
+            },
+            (Err(_), Ok(_)) => {
+                match jwt::parse_request(&req, "Bearer") {
+                    Ok(token) => {
+                        if let Ok(claims) = jwt::decode_claims(&TokenType::Access, token) {
+                            let user_id = claims.claims.user_id;
+                            let username = claims.claims.username;
+                            let new_token = jwt::create(&TokenType::Access, &user_id, &username, ACCESS_TOKEN_EXP).unwrap();
+                            let user_fields = UpdateUserDto {
+                                pwd_hash: None,
+                                username: None,
+                                email: None,
+                                access_token: Some(new_token.clone()),
+                                refresh_token: None,
+                            };
+
+                            req.headers_mut().insert(
+                                actix_web::http::header::AUTHORIZATION,
+                                HeaderValue::from_str(&new_token).unwrap()
+                            );
+                            let fut = self.service.call(req);
+                            Box::pin(async move {
+                                let fields_res = db::user::set_fields(user_id, user_fields, &pool)
+                                .await;
+                                match fields_res {
+                                    Ok(_) => {
+                                        Ok(fut.await?)
+                                    },
+                                    Err(_) => {
+                                        Err(actix_web::error::ErrorInternalServerError(""))
+                                    }
+                                }
+                                
+                            })
+                        } else {
+                            Box::pin(async move {
+                                Err(actix_web::error::ErrorInternalServerError("login again"))
+                            })
+                        }
+                    }, 
+                    Err(_) => {
+                        Box::pin(async move {
+                            Err(actix_web::error::ErrorBadRequest("invalid request"))
+                        })                        
                     }
-                },
-                (Err(_), Ok(_)) => todo!(),
-            }
-        })
+                }
+            },
+            (_, Err(_)) => todo!(),
+        }
     }
     
 }
@@ -115,9 +160,10 @@ pub mod jwt {
     }
 
     pub fn create(token_type: &TokenType, user_id: &uuid::Uuid, username: &String, exp: usize) -> Result<String, Error> {
+        let exp_timestamp = Utc::now().timestamp_micros() as usize + exp;
         let secret = get_secret(token_type).expect("Jwt token secret must be set");
         let header: Header = Header::new(Algorithm::RS256);
-        let claims: Claims = Claims::new(user_id, username, exp);
+        let claims: Claims = Claims::new(user_id, username, exp_timestamp);
         let key: EncodingKey = EncodingKey::from_secret(secret.as_ref());
         let token_res = encode(&header, &claims, &key);
         match token_res {

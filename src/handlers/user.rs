@@ -4,8 +4,6 @@ use uuid::Uuid;
 use crate::PGPool;
 use crate::service;
 
-
-
 #[get("/")]
 pub async fn get_all(pool_state: web::Data<PGPool>) -> impl Responder {
     let conn: &PGPool = pool_state.get_ref();
