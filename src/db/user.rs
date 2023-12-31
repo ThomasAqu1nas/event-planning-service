@@ -86,7 +86,7 @@ pub async fn get_pwd_hash(id: Uuid, pool: &PGPool) -> Result<String, sqlx::Error
     }
 }
 
-pub async fn set_fields(id: Uuid, user_fields: dto::UpdateUserDto, pool: &PGPool) -> Result<u64, sqlx::Error> {
+pub async fn set_fields<'a>(id: Uuid, user_fields: dto::UpdateUserDto, pool: &'a PGPool) -> Result<u64, sqlx::Error> {
     let fields: Option<Vec<(String, String)>> = user_fields.get_values();
     match fields {
         Some(v) => {
