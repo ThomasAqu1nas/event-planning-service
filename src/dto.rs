@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use chrono;
+use chrono::{self, Utc};
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -76,6 +76,37 @@ impl UpdateUserDto {
         } else {
             Some(fields)
         }
+    }
+}
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateEventDto {
+    pub title: Option<String>,
+    pub descr: Option<String>,
+    pub dt: Option<chrono::DateTime<Utc>>,
+    pub place: Option<String>,
+}
+
+impl UpdateEventDto {
+    pub fn get_values(&self) -> Option<Vec<(String, String)>> {
+        let mut fields: Vec<(String, String)> = Vec::new();
+        if let Some(v) = &self.title {
+            fields.push(("title".to_string(), v.to_string()));
+        }
+        if let Some(v) = &self.descr {
+            fields.push(("descr".to_string(), v.to_string()));
+        }
+        if let Some(v) = &self.dt {
+            fields.push(("dt".to_string(), v.timestamp_micros().to_string()));
+        }
+        if let Some(v) = &self.place {
+            fields.push(("place".to_string(), v.to_string()));
+        }
+
+        if fields.is_empty() {
+            None
+        } else {
+            Some(fields)
+        }
     }
 }
