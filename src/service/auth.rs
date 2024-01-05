@@ -104,8 +104,7 @@ impl<S, B> Service<ServiceRequest> for AuthMiddlewareSerive<S>
                                     Err(_) => {
                                         Err(actix_web::error::ErrorInternalServerError(""))
                                     }
-                                }
-                                
+                                }    
                             })
                         } else {
                             Box::pin(async move {
@@ -120,10 +119,13 @@ impl<S, B> Service<ServiceRequest> for AuthMiddlewareSerive<S>
                     }
                 }
             },
-            (_, Err(_)) => todo!(),
+            (_, Err(_)) => {
+                Box::pin(async move {
+                    Err(actix_web::error::ErrorBadRequest("register"))
+                })  
+            },
         }
     }
-    
 }
 
 

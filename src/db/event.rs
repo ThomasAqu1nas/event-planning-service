@@ -32,6 +32,15 @@ pub async fn get_by_id(id: Uuid, pool: &PGPool) -> Result<Event, sqlx::Error> {
     }
 }
 
+pub async fn exists(id: Uuid, pool: &PGPool) -> bool {
+    let res = sqlx::query_as!(Event, "SELECT * FROM events WHERE id = $1", id)
+        .fetch_one(pool)
+        .await;
+    match res {
+        Ok(_) => true,
+        Err(_) => false
+    }
+}
 pub async fn get_all(pool: &PGPool) -> Result<Vec<Event>, sqlx::Error> {
     let res = sqlx::query_as!(Event, "SELECT * FROM events")
     .fetch_all(pool)

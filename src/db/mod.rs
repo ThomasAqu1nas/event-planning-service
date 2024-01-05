@@ -1,5 +1,6 @@
 pub mod user;
 pub mod event;
+pub mod invitations;
 use crate::PGPool;
 use sqlx::postgres::PgPoolOptions;
 

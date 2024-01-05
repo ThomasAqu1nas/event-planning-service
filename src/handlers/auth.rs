@@ -23,3 +23,8 @@ pub async fn register(dto: web::Json<NewUserDto>, pool_state: web::Data<PGPool>)
         Err(_) => HttpResponse::InternalServerError().json("Failed to create new user")
     }
 }
+
+pub fn config(cfg: &mut web::ServiceConfig) {
+    cfg.service(login);
+    cfg.service(register);
+}

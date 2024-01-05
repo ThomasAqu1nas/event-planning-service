@@ -75,3 +75,13 @@ pub async fn update(
       None => todo!()
    }
 }
+
+pub fn init_routes_with_auth(cfg: &mut web::ServiceConfig) {
+   cfg.service(create);
+   cfg.service(update);
+}
+
+pub fn init_public_routes(cfg: &mut web::ServiceConfig) {
+   cfg.service(get_by_id);
+   cfg.service(get_all);
+}

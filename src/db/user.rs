@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::{models::{User, Event}, PGPool, dto};
 
 pub async fn create(user: User, pool: &PGPool) -> Result<PgQueryResult, sqlx::Error> {
-    let res = sqlx::query_as!(User, "INSERT INTO users (id, username, pwd_hash, email, access_token, refresh_token) 
+    let res: Result<PgQueryResult, sqlx::Error> = sqlx::query_as!(User, "INSERT INTO users (id, username, pwd_hash, email, access_token, refresh_token) 
     VALUES ($1, $2, $3, $4, $5, $6)", user.id, user.username, user.pwd_hash, user.email, user.access_token, user.refresh_token)
     .execute(pool)
     .await;
@@ -36,6 +36,16 @@ pub async fn get_all(pool: &PGPool) -> Result<Vec<User>, sqlx::Error> {
 
 pub async fn exists(username: String, pool: &PGPool) -> bool {
     let res = sqlx::query_as!(User, "SELECT * FROM users WHERE username = $1", username)
+        .fetch_one(pool)
+        .await;
+    match res {
+        Ok(_) => true,
+        Err(_) => false
+    }
+}
+
+pub async fn exists_by_id(user_id: Uuid, pool: &PGPool) -> bool {
+    let res = sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", user_id)
         .fetch_one(pool)
         .await;
     match res {
