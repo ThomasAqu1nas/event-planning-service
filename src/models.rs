@@ -39,3 +39,9 @@ pub struct Invitation {
     pub user_id: Uuid,
     pub link: Option<String>
 }
+
+#[derive(Debug, FromRow, serde::Serialize, serde::Deserialize)]
+pub struct Participation {
+    pub event_id: Uuid,
+    pub user_id: Uuid
+}
