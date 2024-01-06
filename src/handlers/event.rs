@@ -24,6 +24,25 @@ pub async fn create(req: HttpRequest, new_event_dto: web::Json<NewEventDto>, poo
    }
 }
 
+#[post("/{id}/subscribe")]
+pub async fn subscribe(req: HttpRequest, event_id: web::Path<Uuid>, pool_state: web::Data<PGPool>) -> impl Responder {
+   let conn: &PGPool = pool_state.get_ref();
+   match req.extensions().get::<UserAuthData>() {
+      Some(user_auth_data) => {
+         let res = service::event::subscribe(
+            event_id.into_inner(), 
+            user_auth_data.user_id, 
+            conn
+         ).await;
+         match res {
+            Ok(val)  => HttpResponse::Ok().json(val),
+            Err(err) => HttpResponse::InternalServerError().json(err)
+         }
+      },
+      None => HttpResponse::from_error(MyError::AuthError)
+   }
+}
+
 #[get("/")]
 pub async fn get_all(pool_state: web::Data<PGPool>) -> impl Responder {
    let conn: &PGPool = pool_state.get_ref();
@@ -75,6 +94,44 @@ pub async fn update(
       None => todo!()
    }
 }
+
+#[post("/{id}/invitation")]
+pub async fn create_invitation(
+   event_id: web::Path<Uuid>,
+   recipient: web::Query<Uuid>,
+   pool_state: web::Data<PGPool>
+) -> impl Responder {
+   let conn = pool_state.get_ref();
+   let res = service::event::create_invitation(
+      event_id.into_inner(), 
+      recipient.into_inner(),
+      conn
+   ).await;
+   match res {
+      Ok(_) => HttpResponse::Created().json("invitation created"),
+      Err(err) => HttpResponse::InternalServerError().json(err)
+   }
+}
+
+#[get("/{id}/accept-invitation")]
+pub async fn accept_invitation(req: HttpRequest, event_id: web::Path<Uuid>, pool_state: web::Data<PGPool>) -> impl Responder {
+   let conn = pool_state.get_ref();
+   match req.extensions().get::<UserAuthData>() {
+      Some(user_auth_data) => {
+         let recipient = user_auth_data.user_id;
+         let res = service::event::subscribe(event_id.into_inner(), recipient, conn)
+            .await;
+         match res {
+            Ok(_) => HttpResponse::Ok().json("invitation accepted"),
+            Err(err) => HttpResponse::from_error(err)
+         }
+      },
+      None => HttpResponse::from_error(MyError::AuthError)
+   }
+
+}
+
+
 
 pub fn init_routes_with_auth(cfg: &mut web::ServiceConfig) {
    cfg.service(create);

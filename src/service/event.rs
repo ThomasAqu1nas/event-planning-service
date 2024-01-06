@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::{dto::{NewEventDto, UpdateEventDto}, PGPool, models::Event, errors::MyError, db};
+use crate::{dto::{NewEventDto, UpdateEventDto}, PGPool, models::{Event, Invitation}, errors::MyError, db};
 
 use super::auth::UserAuthData;
 
@@ -73,14 +73,50 @@ pub async fn get_by_id(id: Uuid, pool: &PGPool) -> Result<Event, MyError> {
    }      
 }
 
-// pub async fn create(dto: NewEventDto, pool: &PGPool, auth_state: Arc<Mutex<UserAuthState>>) -> Result<u64, MyError> {
-//     let NewEventDto { title, descr, dt, place } = dto;
-//     let res = db::event::create(Event {
-//         id: Uuid::new_v4(), title, descr, dt, place,
-//         creator: auth_state.lock().unwrap().id.unwrap(),   
-//     }, pool).await;  
-//     match res {
-//         Ok(val) => Ok(val.rows_affected()),
-//         Err(_) => Err(MyError::InternalError)
-//     }
-// }
+pub async fn is_participant(user_id: Uuid, event_id: Uuid, pool: &PGPool) -> bool {
+   db::event::is_participant(user_id, event_id, pool).await
+}
+
+async fn _create_invitation(event_id: Uuid, recipient: Uuid, pool: &PGPool) -> Result<u64, MyError> {
+   let user_exists = db::user::exists_by_id(recipient.clone(), pool).await;
+   let event_exists = db::event::exists(event_id.clone(), pool).await;
+   if user_exists && event_exists {
+      let invitation_id = Uuid::new_v4();
+      let invitation_link = create_invitation_link(&event_id);
+      let invitation: Invitation = Invitation {
+        id: invitation_id,
+        event_id,
+        user_id: recipient,
+        link: Some(invitation_link),
+      };
+      let res = db::invitations::create(invitation, pool)
+         .await;
+      match res {
+         Ok(val) => Ok(val),
+         Err(_) => Err(MyError::InternalError)
+      }
+   } else {
+      Err(MyError::BadClientData)
+   }
+}
+
+pub async fn create_invitation(event_id: Uuid, recipient: Uuid, pool: &PGPool) -> Result<u64, MyError> {
+   if db::event::is_participant(recipient.clone(), event_id.clone(), pool).await {
+      _create_invitation(event_id, recipient, pool).await
+   } else {
+      Err(MyError::AuthError)
+   }
+}
+
+pub async fn subscribe(event_id: Uuid, user_id: Uuid, pool: &PGPool) -> Result<u64, MyError> {
+   let res = db::event::subscribe(event_id, user_id, pool)
+   .await;
+   match res {
+      Ok(rows_affected) => Ok(rows_affected.rows_affected()),
+      Err(_) => Err(MyError::InternalError)
+   }
+}
+
+pub fn create_invitation_link(event_id: &Uuid) -> String {
+   format!("http://127.0.0.1:8080/accept-invitaion/{:?}", *event_id)
+}
