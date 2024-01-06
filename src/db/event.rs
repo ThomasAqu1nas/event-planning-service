@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{postgres::PgQueryResult, Postgres, QueryBuilder, Execute};
 use uuid::Uuid;
 
-use crate::{models::{Event, User}, PGPool, dto};
+use crate::{models::{Event, User, Participation}, PGPool, dto};
 
 pub enum Filter{
     DT((DateTime<Utc>, DateTime<Utc>)),
@@ -51,6 +51,16 @@ pub async fn get_all(pool: &PGPool) -> Result<Vec<Event>, sqlx::Error> {
     }
 }
 
+pub async fn subscribe(event_id: Uuid, user_id: Uuid, pool: &PGPool) -> Result<PgQueryResult, sqlx::Error> {
+    sqlx::query_as!(
+        Participation,
+        "INSERT INTO participations (event_id, user_id)
+        VALUES ($1, $2)",
+        event_id, user_id
+    ).execute(pool)
+    .await
+}
+
 pub async fn get_participants(id: Uuid, pool: &PGPool) -> Result<Vec<User>, sqlx::Error> {
     let res = sqlx::query_as!(
         User, 
@@ -59,6 +69,19 @@ pub async fn get_participants(id: Uuid, pool: &PGPool) -> Result<Vec<User>, sqlx
     ).fetch_all(pool)
     .await;
     res
+}
+
+pub async fn is_participant(user_id: Uuid, event_id: Uuid, pool: &PGPool) -> bool {
+    let res = sqlx::query_as!(
+        Participation,
+        "SELECT * FROM participations WHERE event_id = $1 AND user_id = $2",
+        event_id, user_id
+    ).fetch_one(pool)
+    .await;
+    match res {
+        Ok(_) => true,
+        Err(_) => false
+    }
 }
 
 pub async fn set_fields<'a>(id: Uuid, event_fields: dto::UpdateEventDto, pool: &'a PGPool) -> Result<u64, sqlx::Error> {
