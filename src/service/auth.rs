@@ -14,6 +14,14 @@ pub struct AuthMiddleware {
     pub db_pool: PGPool
 }
 
+impl AuthMiddleware {
+    pub fn register(pool: PGPool) -> Self {
+        AuthMiddleware {
+            db_pool: pool
+        }
+    }
+}
+
 impl<S, B> Transform<S, ServiceRequest> for AuthMiddleware 
     where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
@@ -146,8 +154,8 @@ pub mod jwt {
         dotenv().ok();
         let env_key: String;
         match token_type {
-            TokenType::Refresh => env_key = "JWT_REFRESH_TOKEN".to_string(),
-            TokenType::Access => env_key ="JWT_ACCESS_TOKEN".to_string()
+            TokenType::Refresh => env_key = "JWT_REFRESH_SECRET".to_string(),
+            TokenType::Access => env_key ="JWT_ACCESS_SECRET".to_string()
         }
         let secret = env::var(env_key);
         secret
@@ -164,13 +172,19 @@ pub mod jwt {
     pub fn create(token_type: &TokenType, user_id: &uuid::Uuid, username: &String, exp: usize) -> Result<String, Error> {
         let exp_timestamp = Utc::now().timestamp_micros() as usize + exp;
         let secret = get_secret(token_type).expect("Jwt token secret must be set");
-        let header: Header = Header::new(Algorithm::RS256);
+        let header: Header = Header::new(Algorithm::HS256);
         let claims: Claims = Claims::new(user_id, username, exp_timestamp);
         let key: EncodingKey = EncodingKey::from_secret(secret.as_ref());
         let token_res = encode(&header, &claims, &key);
         match token_res {
-            Ok(token) => Ok(token),
-            Err(err) => Err(err)
+            Ok(token) => {
+                println!("token: {:?}", token);
+                Ok(token)
+            },
+            Err(err) => {
+                println!("token: {:?}", err);
+                Err(err)
+            }
         }
     } 
 
