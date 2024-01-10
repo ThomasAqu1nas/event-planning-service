@@ -40,8 +40,8 @@ pub async fn get_user_participations(id: web::Path<Uuid>, pool_state: web::Data<
     } 
 }
 
-pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(get_all);
-    cfg.service(get_by_id);
-    cfg.service(get_user_participations);
+pub fn init_routes(cfg: &mut web::ServiceConfig) {
+    cfg.service(get_all)
+        .service(get_by_id)
+        .service(get_user_participations);
 }
