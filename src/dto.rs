@@ -110,3 +110,10 @@ impl UpdateEventDto {
         }
     }
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Routes {
+    pub event: Vec<String>,
+    pub user: Vec<String>,
+    pub auth: Vec<String>
+}
