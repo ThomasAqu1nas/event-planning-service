@@ -20,6 +20,7 @@ pub async fn create(dto: NewUserDto, pool: &PGPool) -> Result<u64, MyError>{
         ) {
             access_token = Some(v);
         } else {
+            println!("err: {:?}", MyError::AuthError);
             return Err(MyError::AuthError);
         }
         if pwd_hash.eq(&pwd_confirm_hash) {
