@@ -2,6 +2,20 @@ use actix_web::{Responder, web, get, post, put, HttpResponse, HttpRequest, HttpM
 use uuid::Uuid;
 use crate::{PGPool, service::{auth::UserAuthData, self}, dto::{NewEventDto, UpdateEventDto}, errors::MyError};
 
+#[get("/")]
+pub async fn get_all(pool_state: web::Data<PGPool>) -> impl Responder {
+   let conn: &PGPool = pool_state.get_ref();
+   let res = service::event::get_all(conn)
+      .await;
+   match res {
+      Ok(events) => {
+         HttpResponse::Ok().json(events)
+      },
+      Err(err) => {
+         HttpResponse::InternalServerError().json(err)
+      }
+   }
+}
 
 #[post("/create")]
 pub async fn create(req: HttpRequest, new_event_dto: web::Json<NewEventDto>, pool_state: web::Data<PGPool>) -> impl Responder {
@@ -40,21 +54,6 @@ pub async fn subscribe(req: HttpRequest, event_id: web::Path<Uuid>, pool_state: 
          }
       },
       None => HttpResponse::from_error(MyError::AuthError)
-   }
-}
-
-#[get("/")]
-pub async fn get_all(pool_state: web::Data<PGPool>) -> impl Responder {
-   let conn: &PGPool = pool_state.get_ref();
-   let res = service::event::get_all(conn)
-      .await;
-   match res {
-      Ok(events) => {
-         HttpResponse::Ok().json(events)
-      },
-      Err(err) => {
-         HttpResponse::InternalServerError().json(err)
-      }
    }
 }
 
@@ -133,12 +132,12 @@ pub async fn accept_invitation(req: HttpRequest, event_id: web::Path<Uuid>, pool
 
 
 
-pub fn init_routes_with_auth(cfg: &mut web::ServiceConfig) {
-   cfg.service(create);
-   cfg.service(update);
-}
-
-pub fn init_public_routes(cfg: &mut web::ServiceConfig) {
-   cfg.service(get_by_id);
-   cfg.service(get_all);
+pub fn init_routes(cfg: &mut web::ServiceConfig) {
+   cfg.service(create)
+      .service(update)
+      .service(subscribe)
+      .service(create_invitation)
+      .service(accept_invitation)
+      .service(get_all)
+      .service(get_by_id);
 }
