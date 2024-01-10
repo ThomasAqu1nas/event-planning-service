@@ -24,7 +24,7 @@ pub async fn register(dto: web::Json<NewUserDto>, pool_state: web::Data<PGPool>)
     }
 }
 
-pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(login);
-    cfg.service(register);
+pub fn init_routes(cfg: &mut web::ServiceConfig) {
+    cfg.service(login)
+        .service(register);
 }
