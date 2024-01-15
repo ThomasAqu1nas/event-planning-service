@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use sqlx::{postgres::PgQueryResult, Postgres, QueryBuilder, Execute};
+use log::info;
+use sqlx::postgres::PgQueryResult;
 use uuid::Uuid;
 
 use crate::{models::{Event, User, Participation}, PGPool, dto};
@@ -84,36 +85,31 @@ pub async fn is_participant(user_id: Uuid, event_id: Uuid, pool: &PGPool) -> boo
     }
 }
 
-pub async fn set_fields<'a>(id: Uuid, event_fields: dto::UpdateEventDto, pool: &'a PGPool) -> Result<u64, sqlx::Error> {
-    let fields: Option<Vec<(String, String)>> = event_fields.get_values();
-    match fields {
-        Some(v) => {
-            let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-                "UPDATE events SET "
-            );
-            let mut separated = query_builder.separated(", ");
-            for field in v {
-                separated.push_bind(format!("{:?} = {:?}", field.0, field.1));
-            }
-            separated.push_unseparated(format!("WHERE id = {id}"));
+pub async fn set_fields(id: Uuid, event_fields: dto::UpdateEventDto, pool: &PGPool) -> Result<u64, sqlx::Error> {
+    let fields = event_fields.get_values();
 
-            let query = query_builder.build();
-            let sql = query.sql();
-            println!("function 'set_fields' was executed with sql query string '{:}'", sql);
-            let res = sqlx::query(sql)
-                .execute(pool)
-                .await;
-            match res {
-                Ok(val) => Ok(val.rows_affected()),
-                Err(err) => Err(err)
-            }
-        },
-        None => Ok(0u64)
-        
+    if let Some(fields) = fields {
+        let mut sql = "UPDATE events SET ".to_string();
+        for (i, (key, _)) in fields.iter().enumerate() {
+            sql.push_str(&format!("{} = ${}, ", key, i + 1));
+        }
+        sql.truncate(sql.len() - 2);
+        sql.push_str(" WHERE id = $");
+        sql.push_str(&(fields.len() + 1).to_string());
+        info!("SQL string: {:}", sql);
+        let mut query = sqlx::query(&sql);
+        for (_, value) in fields.iter() {
+            query = query.bind(value);
+        }
+        query = query.bind(id);
+        let result = query.execute(pool).await?;
+        Ok(result.rows_affected())
+    } else {
+        Ok(0)
     }
 }
 
-pub async fn filter<'a>(filters: Filter, pool: &PGPool) -> Result<Vec<Event>, sqlx::Error> {
+pub async fn filter(filters: Filter, pool: &PGPool) -> Result<Vec<Event>, sqlx::Error> {
     match filters {
         Filter::DT(datetime) => {
             sqlx::query_as!(

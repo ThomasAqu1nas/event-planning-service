@@ -12,7 +12,7 @@ pub async fn create(dto: NewUserDto, pool: &PGPool) -> Result<u64, MyError>{
         let pwd_hash: String = crypto::get_sha3_256_hash(&pwd);
         let pwd_confirm_hash: String = crypto::get_sha3_256_hash(&pwd_confirm);
         let access_token: Option<String>;
-        let refresh_token = None::<String>;
+        let refresh_token: Option<String>;
         let id = Uuid::new_v4();
         
         if let Ok(v) = auth::jwt::create(
@@ -20,7 +20,13 @@ pub async fn create(dto: NewUserDto, pool: &PGPool) -> Result<u64, MyError>{
         ) {
             access_token = Some(v);
         } else {
-            println!("err: {:?}", MyError::AuthError);
+            return Err(MyError::AuthError);
+        }
+        if let Ok(v) = auth::jwt::create(
+            &auth::jwt::TokenType::Refresh, &id, &username, ACCESS_TOKEN_EXP
+        ) {
+            refresh_token = Some(v);
+        } else {
             return Err(MyError::AuthError);
         }
         if pwd_hash.eq(&pwd_confirm_hash) {
@@ -33,7 +39,6 @@ pub async fn create(dto: NewUserDto, pool: &PGPool) -> Result<u64, MyError>{
                 refresh_token
             }, pool)
             .await;
-            dbg!(&res);
             match res {
                 Ok(value) => Ok(value.rows_affected()),
                 Err(_) => Err(MyError::BadClientData)

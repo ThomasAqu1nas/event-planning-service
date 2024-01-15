@@ -1,6 +1,7 @@
 use std::future::{ready, Ready};
 use actix_web::{dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform}, http::header::HeaderValue, HttpMessage};
 use futures_util::future::LocalBoxFuture;
+use log::error;
 use crate::{PGPool, ACCESS_TOKEN_EXP, db, dto::UpdateUserDto};
 
 use self::jwt::TokenType;
@@ -61,8 +62,18 @@ impl<S, B> Service<ServiceRequest> for AuthMiddlewareSerive<S>
     forward_ready!(service);
     
     fn call(&self, mut req: ServiceRequest) -> Self::Future {
-        let access_token_validation_result: Result<String, crate::errors::MyError> = jwt::validate(&req, TokenType::Access, "Bearer");
-        let refresh_token_validation_result: Result<String, crate::errors::MyError> = jwt::validate(&req, TokenType::Refresh, "Bearer");
+        let access_token_validation_result: Result<String, crate::errors::MyError> = jwt::validate(
+            &req, 
+            TokenType::Access, 
+            "Authorization", 
+            "Bearer"
+        );
+        let refresh_token_validation_result: Result<String, crate::errors::MyError> = jwt::validate(
+            &req, 
+            TokenType::Refresh, 
+            "Refresh",
+            "Bearer"
+        );
         let pool = self.db_pool.clone();
         match (access_token_validation_result, refresh_token_validation_result) {
             (Ok(_), Ok(refresh_token)) => {
@@ -83,7 +94,7 @@ impl<S, B> Service<ServiceRequest> for AuthMiddlewareSerive<S>
                 })
             },
             (Err(_), Ok(_)) => {
-                match jwt::parse_request(&req, "Bearer") {
+                match jwt::parse_request(req.request(), "Authorization", "Bearer") {
                     Ok(token) => {
                         if let Ok(claims) = jwt::decode_claims(&TokenType::Access, token) {
                             let user_id = claims.claims.user_id;
@@ -99,7 +110,7 @@ impl<S, B> Service<ServiceRequest> for AuthMiddlewareSerive<S>
 
                             req.headers_mut().insert(
                                 actix_web::http::header::AUTHORIZATION,
-                                HeaderValue::from_str(&new_token).unwrap()
+                                HeaderValue::from_str(&format!("Bearer {new_token}")).unwrap()
                             );
                             let fut = self.service.call(req);
                             Box::pin(async move {
@@ -109,19 +120,22 @@ impl<S, B> Service<ServiceRequest> for AuthMiddlewareSerive<S>
                                     Ok(_) => {
                                         Ok(fut.await?)
                                     },
-                                    Err(_) => {
+                                    Err(err) => {
+                                        error!("[{:} : {:}] INTERNAL SERVER ERROR: {:?}", file!(), line!(), err);
                                         Err(actix_web::error::ErrorInternalServerError(""))
                                     }
                                 }    
                             })
                         } else {
                             Box::pin(async move {
+                                error!("[{:} : {:}] INTERNAL SERVER ERROR: error decoding jwt", file!(), line!());
                                 Err(actix_web::error::ErrorInternalServerError("login again"))
                             })
                         }
                     }, 
                     Err(_) => {
                         Box::pin(async move {
+                            error!("[{:} : {:}] INTERNAL SERVER ERROR: invalid request", file!(), line!());
                             Err(actix_web::error::ErrorBadRequest("invalid request"))
                         })                        
                     }
@@ -129,9 +143,10 @@ impl<S, B> Service<ServiceRequest> for AuthMiddlewareSerive<S>
             },
             (_, Err(_)) => {
                 Box::pin(async move {
-                    Err(actix_web::error::ErrorBadRequest("register"))
+                    error!("[{:} : {:}] INTERNAL SERVER ERROR: refresh your refresh jwt", file!(), line!());
+                    Err(actix_web::error::ErrorBadRequest("login again"))
                 })  
-            },
+            }
         }
     }
 }
@@ -139,11 +154,12 @@ impl<S, B> Service<ServiceRequest> for AuthMiddlewareSerive<S>
 
 pub mod jwt {
     use std::env::{self, VarError};
-    use actix_web::dev::ServiceRequest;
+    use actix_web::{dev::ServiceRequest, HttpRequest};
     use chrono::Utc;
     use dotenv::dotenv;
     use jsonwebtoken::{Header, Algorithm, EncodingKey, encode, decode, errors::Error, DecodingKey, Validation, TokenData};
-    use crate::{dto::{Claims, self, UpdateUserDto}, errors::MyError, PGPool, db, ACCESS_TOKEN_EXP, REFRESH_TOKEN_EXP};
+    use log::{info, warn};
+    use crate::{dto::{Claims, UpdateUserDto}, errors::MyError, PGPool, db, ACCESS_TOKEN_EXP, REFRESH_TOKEN_EXP};
 
     pub enum TokenType {
         Refresh,
@@ -163,9 +179,11 @@ pub mod jwt {
 
     pub fn decode_claims(token_type: &TokenType, token: String) -> Result<TokenData<Claims>, Error> {
         let secret = get_secret(token_type).expect("Jwt token secret must be set");
+        warn!("secret: {:?}", secret);
         let decoding_key = DecodingKey::from_secret(secret.as_ref());
-        let validation = Validation::new(Algorithm::RS256);
+        let validation = Validation::new(Algorithm::HS256);
         let claims = decode::<Claims>(&token, &decoding_key, &validation);
+        warn!("decoded claims: {:?}", claims);
         claims
     }
 
@@ -178,18 +196,16 @@ pub mod jwt {
         let token_res = encode(&header, &claims, &key);
         match token_res {
             Ok(token) => {
-                println!("token: {:?}", token);
                 Ok(token)
             },
             Err(err) => {
-                println!("token: {:?}", err);
                 Err(err)
             }
         }
     } 
 
     /// refreshes given **`token`**
-    pub async fn refresh(token: String, token_type: & TokenType, pool: & PGPool, new_exp: usize) -> Result<String, MyError> {
+    pub async fn refresh(token: String, token_type: &TokenType, pool: & PGPool, new_exp: usize) -> Result<String, MyError> {
         let claims_result: Result<TokenData<Claims>, Error> = decode_claims(&token_type, token);
         let user_id: uuid::Uuid;
         let username: String;
@@ -222,45 +238,28 @@ pub mod jwt {
         }
     }
 
-    ///refreshes **`refresh_token`** if it expires</br>
-    ///otherwise creates a new refresh token
-    pub async fn login(pool: &PGPool, req: dto::LoginUserRequest) -> Result<(), MyError> {
-        let user_id_result = db::user::get_id_by_username(req.username.clone(), pool)
-            .await;
-        return match user_id_result {
-            Ok(user_id) => {
-                let new_access_token: String;
-                let new_refresh_token: String;
-                if let Ok(access_token) = create(&TokenType::Access, &user_id, &req.username, ACCESS_TOKEN_EXP) {
-                    new_access_token = access_token;
-                } else {
-                    return Err(MyError::BadClientData);
-                }
-                if let Ok(refresh_token) = create(&TokenType::Refresh, &user_id, &req.username, REFRESH_TOKEN_EXP) {
-                    new_refresh_token = refresh_token;
-                } else {
-                    return Err(MyError::BadClientData);
-                }
-                let updated_user_fields = UpdateUserDto {
-                    pwd_hash: None,
-                    username: None,
-                    email: None,
-                    access_token: Some(new_access_token),
-                    refresh_token: Some(new_refresh_token),
-                };
-                let res = db::user::set_fields(user_id, updated_user_fields, pool).await;
-                match res {
-                    Ok(_) => {
-                        Ok(())
-                    },
-                    Err(_) => {
-                        Err(MyError::InternalError)
-                    },
-                }
+    ///refreshes **`refresg`** and **`access`** tokens if they are expired</br>
+    ///otherwise creates new tokens
+    pub async fn login(pool: &PGPool, req: HttpRequest) -> Result<(String, String), MyError> {
+        let current_access_token_result = parse_request(&req, "Authorization", "Bearer");
+        let current_refresh_token_result = parse_request(&req, "RefreshToken", "Bearer");
+        match (current_access_token_result, current_refresh_token_result) {
+            (Ok(current_access), Ok(current_refresh)) => {
+                let access_token_refresh = refresh(
+                    current_access, 
+                    &TokenType::Access, 
+                    pool, 
+                    ACCESS_TOKEN_EXP
+                ).await?;
+                let refresh_token_refresh = refresh(
+                    current_refresh, 
+                    &TokenType::Refresh, 
+                    pool, 
+                    REFRESH_TOKEN_EXP
+                ).await?;
+                Ok((access_token_refresh, refresh_token_refresh))
             },
-            Err(_) => {
-                Err(MyError::BadClientData)
-            },
+            (_, _) => Err(MyError::DecodeError)
         }
     }
 
@@ -268,8 +267,8 @@ pub mod jwt {
     /// returns **`MyError::AuthError`** if token is expired </br>
     /// else returns **`token`** itself</br>
     /// throws an **`MyError::DecodeError`** if the jwt decoding fails
-    pub fn validate(req: &ServiceRequest, token_type: TokenType, prefix: &str) -> Result<String, MyError> {
-        if let Ok(token) = parse_request(req, prefix) {
+    pub fn validate(req: &ServiceRequest, token_type: TokenType, header_key: &str, prefix: &str) -> Result<String, MyError> {
+        if let Ok(token) = parse_request(req.request(), header_key, prefix) {
             let claims: Result<TokenData<Claims>, Error> = decode_claims(&token_type, format!("{token}"));
             return match claims {
                 Ok(c) => {
@@ -287,10 +286,11 @@ pub mod jwt {
         Err(MyError::AuthError)
     }
 
-    pub fn parse_request(req: &ServiceRequest, prefix: & str) -> Result<String, MyError> {
-        if let Some(auth_header) = req.headers().get("Authorization") {
+    pub fn parse_request(req: &HttpRequest, header_key: &str, prefix: &str) -> Result<String, MyError> {
+        if let Some(auth_header) = req.headers().get(header_key) {
             if let Ok(auth_value) = auth_header.to_str() {
                 if let Some(token) = auth_value.strip_prefix(prefix) {
+                    info!("PARSE REQUEST TOKEN: {:}", token);
                     return Ok(token.to_string());
                 }
             }

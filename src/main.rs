@@ -5,14 +5,13 @@ pub mod models;
 pub mod dto;
 pub mod errors;
 
-use actix_web::{HttpServer, App, web, middleware::Logger, HttpResponse};
+use actix_web::{HttpServer, App, web, HttpResponse};
 use db::init_db_pool;
 use dto::Routes;
-use service::auth::AuthMiddleware;
+use service::{auth::AuthMiddleware, log::LoggerMiddleware};
 use sqlx::{postgres::Postgres, Pool};
 use dotenv::dotenv;
 use std::env;
-use tokio_util::sync::CancellationToken;
 
 type PGPool = Pool<Postgres>;
 
@@ -28,6 +27,7 @@ async fn main() -> std::io::Result<()>{
         panic!("Failed to get env with name 'DATABASE_URL': {:?}", e);
     });
     let pool: PGPool = init_db_pool(&db_url).await;
+
     let info = || async {
         let routes = Routes { 
             auth: vec!["/login".to_string(), "register".to_string()], 
@@ -49,25 +49,27 @@ async fn main() -> std::io::Result<()>{
         
         HttpResponse::Ok().json(routes)
     };
-
+    service::log::init_logger();
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .route("/", web::get().to(info))
             .service(
                 web::scope("/user")
+                    .wrap(LoggerMiddleware) 
                     .configure(handlers::user::init_routes)  
-                    .wrap(Logger::default()) 
             )
             .service(
                 web::scope("/event")
-                    .configure(handlers::event::init_routes)
                     .wrap(AuthMiddleware::register(pool.clone()))
-
+                    .wrap(LoggerMiddleware)
+                    .configure(handlers::event::init_routes)
             )
-            .service(web::scope("/auth")
-                .configure(handlers::auth::init_routes)
-                .wrap(Logger::default())
+            .service(
+                web::scope("/auth")
+                .wrap(LoggerMiddleware)
+                    .route("/login", web::post().to(handlers::auth::login))
+                    .route("register", web::post().to(handlers::auth::register))
             )
     })
     .bind(("127.0.0.1", 8080))?

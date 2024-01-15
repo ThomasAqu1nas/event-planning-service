@@ -1,4 +1,5 @@
-use sqlx::{postgres::PgQueryResult, QueryBuilder, Postgres, Execute};
+use log::info;
+use sqlx::{postgres::PgQueryResult, query};
 use uuid::Uuid;
 
 use crate::{models::{User, Event}, PGPool, dto};
@@ -96,43 +97,27 @@ pub async fn get_pwd_hash(id: Uuid, pool: &PGPool) -> Result<String, sqlx::Error
     }
 }
 
-pub async fn set_fields<'a>(id: Uuid, user_fields: dto::UpdateUserDto, pool: &'a PGPool) -> Result<u64, sqlx::Error> {
-    let fields: Option<Vec<(String, String)>> = user_fields.get_values();
-    match fields {
-        Some(v) => {
-            let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-                "UPDATE users SET "
-            );
-            let mut separated = query_builder.separated(", ");
-            for field in v {
-                separated.push_bind(format!("{:?} = {:?}", field.0, field.1));
-            }
-            separated.push_unseparated(format!("WHERE id = {id}"));
-
-            let query = query_builder.build();
-            let sql = query.sql();
-            println!("function 'set_fields' was executed with sql query string '{:}'", sql);
-            let res = sqlx::query(sql)
-                .execute(pool)
-                .await;
-            match res {
-                Ok(val) => Ok(val.rows_affected()),
-                Err(err) => Err(err)
-            }
-        },
-        None => Ok(0u64)
-        
+pub async fn set_fields(id: Uuid, user_fields: dto::UpdateUserDto, pool: &PGPool) -> Result<u64, sqlx::Error> {
+    let fields = user_fields.get_values();
+    if let Some(fields) = fields {
+        let mut sql = "UPDATE users SET ".to_string();
+        for (i, (key, _)) in fields.iter().enumerate() {
+            sql.push_str(&format!("{} = ${}, ", key, i + 1));
+        }
+        sql.truncate(sql.len() - 2);
+        sql.push_str(" WHERE id = $");
+        sql.push_str(&(fields.len() + 1).to_string());
+        info!("SQL string: {:}", sql);
+        let mut query = query(&sql);
+        for (_, value) in fields.iter() {
+            query = query.bind(value);
+        }
+        query = query.bind(id);
+        let result = query.execute(pool).await?;
+        Ok(result.rows_affected())
+    } else {
+        Ok(0)
     }
 }
 
-// pub async fn check(id: Uuid, current_timestamp: usize, pool: &PGPool) -> Result<bool, sqlx::Error> {
-//     let res = sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", id)
-//         .fetch_one(pool)
-//         .await;
-//     match res {
-//         Ok(user) => {
-//             if
-//         }
-//     }
-// }
 
